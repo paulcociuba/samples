@@ -1,145 +1,137 @@
-﻿<%@ Page Language="C#" AutoEventWireup="true" %>
+<%@ Page Language="C#" AutoEventWireup="true" Async="true"  %>
 
 <script runat="server">
 
     protected void Page_Load(object sender, EventArgs e)
     {
-
-        //***** Deduce Authentication header type (Basic, Negotiate...etc)
-
-        string authenticationType = Request.ServerVariables["AUTH_TYPE"];
-        if (!string.IsNullOrEmpty(authenticationType))
-            lblAuthMethod.Text = authenticationType;
-
-        //***** Authenticated user
-        string authenticatedUser = Request.ServerVariables["AUTH_USER"];
-        if (!string.IsNullOrEmpty(authenticatedUser))
-            lblAuthUser.Text  = authenticatedUser;
-
-        //***** If NEGOTIATE is used, assume KERBEROS if length of auth. header exceeds 1000 bytes
-
-        if (authenticationType.Equals("Negotiate", StringComparison.OrdinalIgnoreCase))
+        //check authentication
+        if (Context.User.Identity.IsAuthenticated)
         {
-            string authHeader =
-                Request.ServerVariables.Get("HTTP_AUTHORIZATION");
-
-            if (authHeader !=null && authHeader.StartsWith("Negotiate YII", StringComparison.OrdinalIgnoreCase))
-                //append Kerberos to the authentication method
-                lblAuthMethod.Text = lblAuthMethod.Text + " (KERBEROS)";
-            else if(authHeader != null && authHeader.StartsWith("Negotiate TlRM", StringComparison.OrdinalIgnoreCase))
-                //append NTLM to the authentication method
-                lblAuthMethod.Text = lblAuthMethod.Text + " (NTLM - fallback)" ;
-            else
-                //append the mention that we are using session based auth
-                lblAuthMethod.Text = lblAuthMethod.Text + " (Session Based)" ;
+            ckcUseAuthentication.Enabled = true;
+            pnlAuthenticatedUser.Visible = true;
+            lblUserName.Text = Context.User.Identity.Name;
         }
-
-
-        //***** If Client certificate is used
-        if (authenticationType.Equals("SSL/PCT"))
+        else
         {
-            //append the mention that we are using client certificates
-            lblAuthMethod.Text = lblAuthMethod.Text + " (Client certificates)" ;
+            //disable the checkbox and hide the panel
+            ckcUseAuthentication.Enabled = false;
+            pnlAuthenticatedUser.Visible = false;
         }
-                
-
-
-        lblThreadId.Text =
-            System.Security.Principal.WindowsIdentity.GetCurrent().Name;
-
-        //set the process identity in the corresponding label
-        DumpObject(System.Security.Principal.WindowsIdentity.GetCurrent(), tblProcessIdentity);
-
-        //set the thread identity in the corresponding lable
-        DumpObject(System.Threading.Thread.CurrentPrincipal.Identity, tblThreadIdentity);
-
-
-        // Load ServerVariable collection into NameValueCollection object.
-        NameValueCollection serverVariablesCollection = Request.ServerVariables;;
-
-        // Get names of all keys into a string array. 
-        String[] keyNames = serverVariablesCollection.AllKeys;
-
-        //declare one table row and two table cells references to be used
-        TableRow row; TableCell keyNameCell; TableCell keyValueCell;
-
-        foreach (string keyName in keyNames)
-        {
-            //initialize a row and two cells
-            row = new TableRow();
-            keyNameCell = new TableCell();
-            keyValueCell = new TableCell();
-
-            keyNameCell.Text= keyName + ":";
-            
-            String[] keyValues = serverVariablesCollection.GetValues(keyName);
-
-            //get each of the possible values for the key
-            foreach (string valueStr in keyValues) {
-                keyValueCell.Text= keyValueCell.Text + Server.HtmlEncode(valueStr);
-            }
-
-
-            //keyValueCell.Text=Server.HtmlEncode(keyValues[0]);
-            row.Cells.AddRange(new TableCell[] { keyNameCell, keyValueCell });
-            tblSrvVar.Rows.Add(row);
-        }
-
     }
 
-
-    protected void DumpObject(object o, Table outputTable)
+    protected void cmdScrapPage_Click(Object sender, EventArgs e)
     {
+        string targetUrl = String.Empty;
+
+        if (String.IsNullOrEmpty(txtSiteAddress.Text))
+        {
+            targetUrl = "http://www.linqto.me/SamplePage.html";
+        }
+        else
+        {
+            targetUrl = txtSiteAddress.Text.Trim();
+        }
+
+        //call the ScrapPage method
+        txtScrappedContent.Text = ScrapPage(targetUrl, ckcUseAuthentication.Checked);
+    }
+
+    
+
+    public string ScrapPage(string targetUrl, bool useAuthentication, uint timeOut = 5000)
+    {
+        //we will not do error checking!
+        System.Net.HttpWebRequest request = System.Net.HttpWebRequest.Create(targetUrl)
+            as System.Net.HttpWebRequest;
+
+        //get a hold of the network credentials
+        var credentials = System.Net.CredentialCache.DefaultNetworkCredentials;
+
+        //check if need to send credentials
+        if (useAuthentication)
+        {
+            request.PreAuthenticate = true;
+
+            //get the credentials from the current thread
+            //if no impersonation: it will use the app pool account
+            //if impersonation is used: we will impersonate the authenticated user's identity
+            request.Credentials = credentials;
+
+            //have the server in the backend also authenticate on the response to the request
+            request.AuthenticationLevel = System.Net.Security.AuthenticationLevel.MutualAuthRequested;
+        }
+
+        request.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
+
+        //set the request timeout
+        request.Timeout = (int)timeOut;
+
+        //set a custom user agent
+        request.UserAgent = "Linqto.me bot Url(http://www.linqto.me)";
+
+        //if the uri is not an http format
+        if (request == null)
+            return String.Empty;
+
+        //send the request to the backend server
+        System.Net.HttpWebResponse response = null;
 
         try
-	    {
-            //use reflection to get all members
-            System.Reflection.MemberInfo[] reflectionWindowsIdentityMembers = 
-                    o.GetType().FindMembers(
-                        System.Reflection.MemberTypes.Property,
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
-                        delegate(System.Reflection.MemberInfo objMemberInfo, Object objSearch) { return true; },
-                        null);
+        {
+            //launch the request
+            response = request.GetResponse() as System.Net.HttpWebResponse;
 
-            //declare a new reference for a table row and two table cells
-            TableRow row; TableCell keyNameCell; TableCell keyValueCell;
-
-            //loop through each of the members
-            foreach (System.Reflection.MemberInfo currentMemberInfo in reflectionWindowsIdentityMembers)
+            StringBuilder responseText = new StringBuilder();
+            responseText.Append("\n Response Content: \n");
+            if (ckcUseAuthentication.Checked)
             {
-                //intialize the variables
-                row = new TableRow();
-                keyNameCell = new TableCell();
-                keyValueCell = new TableCell();
-                
-                System.Reflection.MethodInfo getAccessorInfo = ((System.Reflection.PropertyInfo)currentMemberInfo).GetGetMethod();
+                responseText.Append(" Using authentication: \n");
+                responseText.Append(" Authenticating as: " + credentials.UserName + "\n");
+            }
 
-                //set the name of the member
-                keyNameCell.Text = currentMemberInfo.Name + ":";
+            //if the response is not HTML
+            if (response.ContentType.StartsWith("text/html"))
+            {
+                //download the resposne content
+                System.IO.Stream responseStream = response.GetResponseStream();
 
-                //set the value
-                object value = getAccessorInfo.Invoke(o, null);
-                if (typeof(IEnumerable).IsInstanceOfType(value) && !typeof(string).IsInstanceOfType(value))
+                //guess the encoding
+                Encoding responseEncodingCode;
+                if (String.IsNullOrEmpty(response.ContentEncoding))
                 {
-                    foreach (object item in (IEnumerable)value)
-                    {
-                        keyValueCell.Text = keyValueCell.Text + item.ToString() + "<br />";
-                    }
+                    responseEncodingCode = Encoding.UTF8;
                 }
                 else
                 {
-                    if(value != null)
-                        keyValueCell.Text = value.ToString();
+                    try
+                    {
+                        responseEncodingCode = System.Text.Encoding.GetEncoding(response.ContentEncoding);
+                    }
+                    catch
+                    {
+                        responseEncodingCode = Encoding.UTF8;
+                    }
+
                 }
 
-                row.Cells.AddRange(new TableCell[] { keyNameCell, keyValueCell });
-                outputTable.Rows.Add(row);
+                //read the response with the appropriate encoding
+                System.IO.StreamReader readResponseStream = new System.IO.StreamReader(responseStream, responseEncodingCode);
+                responseText.Append(readResponseStream.ReadToEnd());
+
+                responseText.Append("\n: End response content.");
             }
-	    }
-        catch
-	    {
-            ;
+            else
+            {
+                responseText.Append("Page is not Text or HTML");
+            }
+
+            return responseText.ToString();
+
+        } catch (System.Net.WebException we)
+        {
+            return "Error encountered: " + we.Message;
         }
+
 
     }
 
@@ -149,132 +141,104 @@
 
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head runat="server">
-    <title>Who am I Page</title>
+    <title>Scrapper Test Page - self contained</title>
     <style type="text/css">
         body{
             padding: 10px;
-            font-family: 'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+            font-family: 'Segoe UI', Verdana, Geneva, Tahoma, sans-serif;
             font-size: 14px;
         }
 
-        .center {
-            margin: auto;
-            width: 50%;
-            padding: 10px;
+        .paragraphStandardLeft{
+            font-family: 'Segoe UI', Verdana, Geneva, Tahoma, sans-serif;
+            font-size: 12px;
+            color: #535353;
+            text-align: left;
         }
 
-        .paragraphBold {
-            font-weight: bold;
-            color: #02097c
+        .textBoxLarge{
+           padding: 5px;
+           margin: 5px;
+           border: 1px solid #C0C0C0;
+           font-family: Arial, Helvetica, sans-serif;
+           font-size:medium;
+           font-weight:bold;
+           font-variant: normal;
+           color: #808080;
+           font-style: normal;
         }
 
-        .paragraphInfo {
-            font-weight: bold;
-            color: #800000;
+        .textBoxLarge:focus{
+            border: 1px solid #9ecaed;
+            color: #003399;
+            box-shadow: 0 0 10px #9ecaed;
+            -webkit-box-shadow: 0 0 10px #9ecaed;
+            -moz-box-shadow: 0 0 10px #9ecaed;
+        }
+
+        .roundButton{
+            padding: 5px 10px 5px 10px;
+            margin: 3px;
+            border-radius: 5px;
+            -webkit-border-radius: 5px;
+            -moz-border-radius: 5px;
+            border: 1px solid #C0C0C0;
+        }
+
+        .blueButton{
+            border-color: #269abc;
+            background: #2db9e3;
+            background: linear-gradient(to bottom right, #2db9e3, #1a7c9d);
+        }
+
+        .blueButton:hover{
+            border-color: #29A7CB;
+            background-color: #62c2df;
+            background: linear-gradient(to buttom right, #62c2df, #2db9e3);
+            box-shadow: 0 0 6px #9ecaed;
+            -webkit-box-shadow: 0 0 6px #9ecaed;
+            -moz-box-shadow: 0 0 6px #9ecaed;
+            color: white;
+            text-decoration: none;
+
         }
     </style>
 </head>
 <body>
-    <form id="MainForm" runat="server">
-        <div>
-            <div class="center">
-                <h1>~ Who Am I Page ~</h1>
-                <br />
-
-                
-
-                <br />
-                <div>
-                    <a href="#Authentication">Auth Information</a> | 
-                    <a href="#Identity">Identity</a> |
-                    <a href="#WindowsIdentity">Windows Identity</a> |
-                    <a href="#SeverVariables">Server Variables</a>
-                </div>
-            </div>
-
+    <form id="form1" runat="server">
+        <div class="paragraphStandardLeft">
+            <br />
             <br />
 
-            <div>
-                <fieldset id="Authentication">
-                    <label class="paragraphBold">Authentication Information:</label>
+            <strong>Press 'Scrap Page' to scrap the below targer:</strong>
 
-                    <br />
+            <br />
+            <br />
 
-                    <table border="0">
-                        <tr>
-                            <td>Authentication Method: </td>
-                            <td class="paragraphInfo">
-                                <asp:label ID="lblAuthMethod" Text="Anonymous" runat="server" />
-                            </td>
-                            <td>
-                                &nbsp;&nbsp; Request.ServerVariables("AUTH_TYPE")
-                            </td>
-                        </tr>
+            <strong>Target:</strong> (including http:// or https:// prefix)
 
-                        <tr>
-                            <td>Identity: </td>
-                            <td class="paragraphInfo">
-                                <asp:label id="lblAuthUser" Text="None" runat="server" />
-                            </td>
-                            <td>
-                                &nbsp;&nbsp; Request.ServerVariables("AUTH_USER") or System.Threading.Thread.CurrentPrincipal.Identity
-                            </td>
-                        </tr>
+            <br />
+            <asp:TextBox ID="txtSiteAddress" runat="server" CssClass="textBoxLarge" Width="400px"></asp:TextBox>
+            <br />
+            Options:
+            <asp:CheckBox ID="ckcUseAuthentication" runat="server" Text="Use Credentials" />
+            <br />
 
-                        <tr>
-                            <td>Windows identity: </td>
-                            <td class="paragraphInfo"> 
-                                <asp:label id="lblThreadId" runat="server" />
-                            </td>
-                            <td>
-                                &nbsp;&nbsp; System.Security.Principal.WindowsIdentity.Getcurrent
-                            </td>
-                        </tr>
-                    </table>
-                </fieldset>
-               
+            <asp:Panel ID="pnlAuthenticatedUser" runat="server">
+                Authenticaed as:
+                <asp:Label ID="lblUserName" runat="server" EnableViewState="false" />
+            </asp:Panel>
 
-                <br />
-                <hr />
-                <br />
-
-                <fieldset id="Identity">
-                    <label class="paragraphBold">Identity (System.Threading.Thread.CurrentPrincipal.Identity)</label>
-                    
-                    <br />
-
-                    <asp:Table ID="tblThreadIdentity" runat="server"></asp:Table>
-                </fieldset>
-
-                <br />
-                <hr />
-                <br />
-
-	            <fieldset id="WindowsIdentity">
-                    <label class="paragraphBold">Windows Identity (System.Security.Principal.WindowsIdentity.GetCurrent)</label>
-                    
-                    <br />
-
-                    <asp:Table ID="tblProcessIdentity" runat="server"></asp:Table>
-                </fieldset>
-
-                <br />
-                <hr />
-                <br />
-
-                <span id="SeverVariables" class="paragraphBold">Dump of server variables :</span>
-                
-                <br/>
-                <br/>
-                
-                <asp:Table ID="tblSrvVar" runat="server"></asp:Table>
-
-                <br />
-                <hr />
-                <br />
-                <asp:Button ID="cmdSubmit" runat="server" Text="Submit Form" />
-
-            </div>
+            <br />
+            <br />
+            Page content from response:
+            <br />
+            <asp:TextBox ID="txtScrappedContent" runat="server" TextMode="MultiLine" Height="700px" Width="750px"
+                EnableViewState="false" CssClass="textBoxLarge" />
+            <br />
+            <br />
+            <asp:Button ID="cmdScrapPage" Text="Scrap Page" runat="server" OnClick="cmdScrapPage_Click" CssClass="roundButton blueButton" />
+            
         </div>
     </form>
 </body>
